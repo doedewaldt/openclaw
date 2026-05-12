@@ -17,6 +17,7 @@ import {
   closeDispatcher,
   createPinnedDispatcher,
   resolveSsrFPolicyForUrl,
+  destroyDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type PinnedDispatcherPolicy,
@@ -363,13 +364,32 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   });
 
   let released = false;
+  let activeDispatcher: Dispatcher | null = null;
+
+  const onAbort = () => {
+    if (activeDispatcher) {
+      destroyDispatcher(activeDispatcher);
+    }
+  };
+
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
   const release = async (dispatcher?: Dispatcher | null) => {
     if (released) {
       return;
     }
     released = true;
     cleanup();
-    await closeDispatcher(dispatcher ?? undefined);
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
+    if (signal?.aborted) {
+      destroyDispatcher(dispatcher ?? undefined);
+    } else {
+      await closeDispatcher(dispatcher ?? undefined);
+    }
   };
 
   const visited = new Set<string>([params.url]);
@@ -464,6 +484,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           timeoutMs,
         );
       }
+
+      activeDispatcher = dispatcher;
 
       const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
